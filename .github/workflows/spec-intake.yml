@@ -25,10 +25,27 @@ jobs:
           [ -d .cursor/rules ] && sed -n '1,120p' .cursor/rules/*.md >> /tmp/raw.md || true
           [ -d docs/adr ] && sed -n '1,120p' docs/adr/*.md >> /tmp/raw.md || true
 
-      - name: Summarize with Gemini (SPEC)
+      - name: Summarize with Gemini (SPEC) - Optional
         run: |
-          bash tools/summarize_with_gemini.sh "/tmp/raw.md" "/tmp/capsule.md" "SPEC"
-          head -n 12 /tmp/capsule.md || true
+          # Gemini가 있으면 사용, 없으면 건너뛰기
+          if command -v gemini >/dev/null 2>&1; then
+            bash tools/summarize_with_gemini.sh "/tmp/raw.md" "/tmp/capsule.md" "SPEC"
+            head -n 12 /tmp/capsule.md || true
+          else
+            echo "Gemini CLI not available, creating basic summary"
+            # 기본 요약 생성
+            NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            cat > /tmp/capsule.md << EOF
+# Context Capsule (for Claude Code)
+- Repo: virtual-marketing-team
+- Mode: SPEC
+- Time: $NOW
+
+## Key Points / Change Summary
+$(head -n 20 /tmp/raw.md)
+EOF
+            echo "Basic summary created at /tmp/capsule.md"
+          fi
 
       - name: Post to Issue & mention Claude
         env:
