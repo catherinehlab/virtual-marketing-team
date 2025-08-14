@@ -1,0 +1,99 @@
+name: Branch Protection - Block ChatGPT5 Code Changes
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  protect-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if ChatGPT5 is attempting code changes
+        id: check-author
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            AUTHOR="${{ github.event.pull_request.user.login }}"
+            EVENT_TYPE="PR"
+          else
+            AUTHOR="${{ github.event.head_commit.author.name }}"
+            EVENT_TYPE="Push"
+          fi
+          
+          echo "author=$AUTHOR" >> $GITHUB_OUTPUT
+          echo "event_type=$EVENT_TYPE" >> $GITHUB_OUTPUT
+          
+          # ChatGPT5 계정 체크
+          if [[ "$AUTHOR" == *"ChatGPT5"* ]] || [[ "$AUTHOR" == *"ChatGPT5-bot"* ]]; then
+            echo "blocked=true" >> $GITHUB_OUTPUT
+            echo "❌ ChatGPT5 detected - blocking code changes"
+          else
+            echo "blocked=false" >> $GITHUB_OUTPUT
+            echo "✅ Author allowed: $AUTHOR"
+          fi
+
+      - name: Block ChatGPT5 PRs
+        if: steps.check-author.outputs.blocked == 'true' && steps.check-author.outputs.event_type == 'PR'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "🚫 Blocking ChatGPT5 PR #${{ github.event.pull_request.number }}"
+          
+          # PR을 자동으로 닫고 차단 메시지 추가
+          BLOCK_MESSAGE="
+          ## 🚫 ChatGPT5 Code Changes Blocked
+          
+          **ChatGPT5는 코드 변경을 허용하지 않습니다.**
+          
+          ### 허용된 역할:
+          - ✅ **요구사항 수집 및 분석**
+          - ✅ **사양 전달 및 이슈 생성**
+          - ❌ **코드 작성 및 수정**
+          
+          ### 올바른 워크플로우:
+          1. **ChatGPT5**: 요구사항 수집 → 이슈 생성
+          2. **Gemini**: 요구사항 요약
+          3. **Claude**: 태스크 분해 및 의사결정
+          4. **Cursor**: 실제 개발 및 구현
+          
+          이 PR은 자동으로 닫힙니다. 올바른 워크플로우를 따라주세요.
+          "
+          
+          # PR 닫기
+          curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -X PATCH \
+            -d '{"state":"closed"}' \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}"
+          
+          # 차단 메시지 추가
+          printf '{"body":%s}\n' "$(jq -Rsa . <<<"$BLOCK_MESSAGE")" > block_message.json
+          curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d @block_message.json \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
+          
+          # PR에 차단 라벨 추가
+          curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -X POST \
+            -d '{"labels":["blocked","chatgpt5-violation"]}' \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels"
+
+      - name: Block ChatGPT5 Direct Pushes
+        if: steps.check-author.outputs.blocked == 'true' && steps.check-author.outputs.event_type == 'Push'
+        run: |
+          echo "🚫 ChatGPT5 direct push detected - this should not happen"
+          echo "Branch protection rules should prevent this"
+          exit 1
+
+      - name: Allow Non-ChatGPT5 Changes
+        if: steps.check-author.outputs.blocked == 'false'
+        run: |
+          echo "✅ Allowing changes from: ${{ steps.check-author.outputs.author }}"
+          echo "Proceeding with normal workflow..."

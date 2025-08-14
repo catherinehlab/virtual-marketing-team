@@ -1,0 +1,55 @@
+name: Claude Autoplan (/tasks generator)
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  issues: write
+
+jobs:
+  plan:
+    if: contains(github.event.issue.labels.*.name, 'spec-draft') || contains(github.event.issue.labels.*.name, 'needs-plan')
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_MODEL: claude-3-5-sonnet-20240620
+    steps:
+      - name: Guard - require API key
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "No ANTHROPIC_API_KEY; skip." && exit 0
+          fi
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Build prompt
+        run: |
+          printf "%s\n\n%s\n" "${{ github.event.issue.title }}" "${{ github.event.issue.body }}" > issue.txt
+          cat > sys.txt << 'SYS'
+You are the CTO. Read the spec and produce strict JSON for task fanout.
+Return ONLY JSON. No commentary.
+SYS
+
+      - name: Call Claude
+        run: |
+          BODY=$(jq -Rs . < issue.txt)
+          SYS=$(jq -Rs . < sys.txt)
+          curl -sS https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "{\"model\":\"${CLAUDE_MODEL}\",\"max_tokens\":2000,\"system\":$SYS,\"messages\":[{\"role\":\"user\",\"content\":$BODY}]}" > claude.json
+          
+          jq -r '.content[0].text' claude.json > tasks.json.txt || true
+          cat tasks.json.txt | jq . > /dev/null
+
+      - name: Post /tasks comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf "/tasks\n\`\`\`json\n%s\n\`\`\`\n" "$(cat tasks.json.txt)" > comment.md
+          jq -Rs --arg b "$(cat comment.md)" '{"body":$b}' <<< "" > body.json
+          curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -d @body.json \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"

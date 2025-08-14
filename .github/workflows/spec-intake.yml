@@ -12,10 +12,8 @@ env:
 
 jobs:
   from-issue:
-    # spec-draft 라벨 + 허용 작성자만 처리
-    if: >-
-      contains(github.event.issue.labels.*.name, 'spec-draft') &&
-      contains(fromJson('["catherinehlab","ChatGPT5-bot","PhillipHong"]'), github.event.issue.user.login)
+    # spec-draft 라벨만 있으면 누구든 처리 (작성자 제한 제거)
+    if: contains(github.event.issue.labels.*.name, 'spec-draft')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,11 +35,19 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           BODY="$(cat /tmp/capsule.md; printf "\n\n/cc @$CLAUDE")"
-          printf '{"body":%s}\n' "$(jq -Rsa . <<<"$BODY" 2>/dev/null || python - <<'PY'
-import sys,json
-print(json.dumps({"dummy":sys.stdin.read()})[9:-1])
-PY
-)" > body.json
+          
+          # Python을 사용하여 JSON 생성 (jq 대신)
+          python3 -c "
+          import json
+          import sys
+          
+          body = '''$BODY'''
+          body_data = {'body': body}
+          
+          with open('body.json', 'w') as f:
+              json.dump(body_data, f, ensure_ascii=False)
+          "
+          
           curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
             -d @body.json \
             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
