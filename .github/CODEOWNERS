@@ -1,4 +1,4 @@
-/*                       @your-org/maintainers
-/agents/ads/**           @your-org/perf-marketing
-/workflows/n8n/**        @your-org/automation
-/docs/adr/**             @your-org/architecture
+# 더 구체적인 규칙이 아래에 올수록 우선
+/*                  @ClaudeCode @catherinehlab
+/docs/**            @catherinehlab
+/clients/**         @catherinehlab

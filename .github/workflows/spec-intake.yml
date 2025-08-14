@@ -1,59 +1,47 @@
-name: Spec Intake (ChatGPT5 → Gemini → Claude)
+name: Spec Intake (Issues only → Gemini → Claude)
 on:
   issues:
-    types: [opened, edited]
-  pull_request:
-    types: [opened, edited, synchronize]
+    types: [opened, edited, labeled]
 
 permissions:
   contents: read
   issues: write
-  pull-requests: write
 
 env:
   CLAUDE: ${{ secrets.CLAUDE_HANDLE }}
 
 jobs:
   from-issue:
-    if: github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'spec-draft')
+    # spec-draft 라벨 + 허용 작성자만 처리
+    if: >-
+      contains(github.event.issue.labels.*.name, 'spec-draft') &&
+      contains(fromJson('["catherinehlab","ChatGPT5-bot","PhillipHong"]'), github.event.issue.user.login)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Make raw from Issue body
         run: |
           printf "%s\n" "${{ github.event.issue.title }}" > /tmp/raw.md
           printf "\n\n%s\n" "${{ github.event.issue.body }}" >> /tmp/raw.md
           [ -d .cursor/rules ] && sed -n '1,120p' .cursor/rules/*.md >> /tmp/raw.md || true
           [ -d docs/adr ] && sed -n '1,120p' docs/adr/*.md >> /tmp/raw.md || true
+
       - name: Summarize with Gemini (SPEC)
         run: |
           bash tools/summarize_with_gemini.sh "/tmp/raw.md" "/tmp/capsule.md" "SPEC"
-          head -n 12 /tmp/capsule.md
+          head -n 12 /tmp/capsule.md || true
+
       - name: Post to Issue & mention Claude
-        env: { GITHUB_TOKEN: ${{ github.token }} }
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          jq -n --arg body "$(cat /tmp/capsule.md)\n\n/cc @$CLAUDE" '{body:$body}' > body.json
+          BODY="$(cat /tmp/capsule.md; printf "\n\n/cc @$CLAUDE")"
+          printf '{"body":%s}\n' "$(jq -Rsa . <<<"$BODY" 2>/dev/null || python - <<'PY'
+import sys,json
+print(json.dumps({"dummy":sys.stdin.read()})[9:-1])
+PY
+)" > body.json
           curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
             -d @body.json \
             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
-
-  from-pr:
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'spec-draft')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build raw from PR title/body + patch
-        run: |
-          printf "%s\n\n%s\n" "${{ github.event.pull_request.title }}" "${{ github.event.pull_request.body }}" > /tmp/raw.md
-          gh pr diff ${{ github.event.pull_request.number }} --patch | head -n 800 >> /tmp/raw.md || true
-          [ -d .cursor/rules ] && sed -n '1,120p' .cursor/rules/*.md >> /tmp/raw.md || true
-          [ -d docs/adr ] && sed -n '1,120p' docs/adr/*.md >> /tmp/raw.md || true
-      - name: Summarize with Gemini (SPEC)
-        run: bash tools/summarize_with_gemini.sh "/tmp/raw.md" "/tmp/capsule.md" "SPEC"
-      - name: Post capsule & request Claude review
-        env: { GITHUB_TOKEN: ${{ github.token }} }
-        run: |
-          jq -n --arg body "$(cat /tmp/capsule.md)\n\n/cc @$CLAUDE" '{body:$body}' > body.json
-          curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-            -d @body.json \
-            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"

@@ -1,0 +1,38 @@
+name: PR Author Guard (block code PRs from non-approved authors)
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block unapproved authors for code changes
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          # ✅ 허용 작성자 목록(스페이스 구분): 필요시 여기만 수정
+          APPROVED: "catherinehlab CursorDev ClaudeCode github-actions[bot]"
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # 1) 작성자 허용이면 통과
+          for a in $APPROVED; do
+            if [ "$AUTHOR" = "$a" ]; then
+              echo "Author allowed: $AUTHOR"
+              exit 0
+            fi
+          done
+
+          # 2) 변경 파일 목록 조회
+          curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO/pulls/$PR/files?per_page=200" > files.json
+
+          # 3) 비코드 변경만(문서/클라이언트 설정/README)인 경우는 예외적으로 통과
+          if ! grep -E '"filename":' files.json | grep -vE 'docs/|clients/|README\.md' >/dev/null; then
+            echo "Docs/clients-only changes by non-approved author → allowed."
+            exit 0
+          fi
+
+          echo "❌ PR author '$AUTHOR' is not allowed to submit code changes."
+          exit 1
