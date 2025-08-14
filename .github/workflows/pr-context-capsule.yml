@@ -1,0 +1,50 @@
+name: PR Context Capsule (Gemini → Claude Code)
+on:
+pull_request:
+types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+contents: read
+pull-requests: write
+
+env:
+REVIEWER: "ClaudeCode" # 필요 시 본인/팀 계정으로 교체
+
+jobs:
+build-capsule:
+runs-on: ubuntu-latest
+steps:
+- uses: actions/checkout@v4
+
+  - name: Install jq
+    run: sudo apt-get update && sudo apt-get install -y jq
+
+  - name: Build raw context
+    run: |
+      bash tools/build_pr_context.sh "${{ github.event.pull_request.number }}" "/tmp/raw.md"
+
+  - name: Summarize with Gemini (or fallback)
+    run: |
+      bash tools/summarize_with_gemini.sh "/tmp/raw.md" "/tmp/context-capsule.md"
+      head -n 12 /tmp/context-capsule.md
+
+  - name: Post capsule as PR comment (REST)
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    run: |
+      jq -n --arg body "$(cat /tmp/context-capsule.md)" '{body:$body}' > body.json
+      curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+        -d @body.json \
+        "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
+
+  - name: Request reviewer (optional)
+    if: env.REVIEWER != ''
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    run: |
+      jq -n --argjson reviewers "[\"${REVIEWER}\"]" '{reviewers:$reviewers}' > req.json
+      curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+        -d @req.json \
+        "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers"
+
+
