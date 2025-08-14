@@ -1,0 +1,29 @@
+name: PR Context Capsule (Gemini → Claude Code)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build-capsule:
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Build raw context
+        run: |
+          bash tools/build_pr_context.sh "${{ github.event.pull_request.number }}" "." "/tmp/raw.md"
+      - name: Summarize with Gemini
+        run: |
+          bash tools/summarize_with_gemini.sh "/tmp/raw.md" "/tmp/context-capsule.md"
+      - name: Post capsule & request Claude review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} -F /tmp/context-capsule.md
+          gh pr edit ${{ github.event.pull_request.number }} --add-reviewer "ClaudeCode"
