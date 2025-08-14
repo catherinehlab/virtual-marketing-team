@@ -1,70 +1,29 @@
-name: Spec Intake (Issues only → Gemini → Claude)
+name: Spec Intake (issues → capsule comment)
 on:
   issues:
     types: [opened, edited, labeled]
 
 permissions:
-  contents: read
   issues: write
 
-env:
-  CLAUDE: ${{ secrets.CLAUDE_HANDLE }}
-
 jobs:
-  from-issue:
-    # spec-draft 라벨만 있으면 누구든 처리 (작성자 제한 제거)
-    if: contains(github.event.issue.labels.*.name, 'spec-draft')
+  comment:
+    if: >
+      (github.event.action == 'labeled' && github.event.label.name == 'spec-draft') ||
+      (github.event.action != 'labeled' && contains(github.event.issue.labels.*.name, 'spec-draft'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Make raw from Issue body
+      - name: Dump event (debug)
         run: |
-          printf "%s\n" "${{ github.event.issue.title }}" > /tmp/raw.md
-          printf "\n\n%s\n" "${{ github.event.issue.body }}" >> /tmp/raw.md
-          [ -d .cursor/rules ] && sed -n '1,120p' .cursor/rules/*.md >> /tmp/raw.md || true
-          [ -d docs/adr ] && sed -n '1,120p' docs/adr/*.md >> /tmp/raw.md || true
-
-      - name: Summarize with Gemini (SPEC) - Optional
-        run: |
-          # Gemini가 있으면 사용, 없으면 건너뛰기
-          if command -v gemini >/dev/null 2>&1; then
-            bash tools/summarize_with_gemini.sh "/tmp/raw.md" "/tmp/capsule.md" "SPEC"
-            head -n 12 /tmp/capsule.md || true
-          else
-            echo "Gemini CLI not available, creating basic summary"
-            # 기본 요약 생성
-            NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            cat > /tmp/capsule.md << EOF
-# Context Capsule (for Claude Code)
-- Repo: virtual-marketing-team
-- Mode: SPEC
-- Time: $NOW
-
-## Key Points / Change Summary
-$(head -n 20 /tmp/raw.md)
-EOF
-            echo "Basic summary created at /tmp/capsule.md"
-          fi
-
-      - name: Post to Issue & mention Claude
+          echo "EVENT=${GITHUB_EVENT_NAME}"
+          jq . < "$GITHUB_EVENT_PATH" || true
+      
+      - name: Post capsule ack
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          BODY="$(cat /tmp/capsule.md; printf "\n\n/cc @$CLAUDE")"
-          
-          # Python을 사용하여 JSON 생성 (jq 대신)
-          python3 -c "
-          import json
-          import sys
-          
-          body = '''$BODY'''
-          body_data = {'body': body}
-          
-          with open('body.json', 'w') as f:
-              json.dump(body_data, f, ensure_ascii=False)
-          "
-          
-          curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+          BODY="📌 Spec received. /cc @${{ secrets.CLAUDE_HANDLE || 'ClaudeCode' }}"
+          jq -Rs --arg b "$BODY" '{"body":$b}' <<<"" > body.json
+          curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             -d @body.json \
             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
