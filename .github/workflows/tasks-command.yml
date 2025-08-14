@@ -42,7 +42,18 @@ jobs:
           ChatGPT5 → Gemini → Claude → Cursor
           "
           
-          printf '{"body":%s}\n' "$(jq -Rsa . <<<"$TASK_REQUEST")" > task_body.json
+          # Python을 사용하여 JSON 생성 (jq 대신)
+          python3 -c "
+          import json
+          import sys
+          
+          task_request = '''$TASK_REQUEST'''
+          body_data = {'body': task_request}
+          
+          with open('task_body.json', 'w') as f:
+              json.dump(body_data, f, ensure_ascii=False)
+          "
+          
           curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
             -d @task_body.json \
             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
