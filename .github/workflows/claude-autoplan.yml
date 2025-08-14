@@ -24,7 +24,7 @@ jobs:
           echo "EVENT=${GITHUB_EVENT_NAME}"
           jq . < "$GITHUB_EVENT_PATH" || true
 
-      - name: Guard: API key
+      - name: Guard - API key
         run: |
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             echo "No ANTHROPIC_API_KEY; skipping autoplanning." && exit 0
@@ -36,16 +36,16 @@ jobs:
       - name: Build prompt
         run: |
           printf "%s\n\n%s\n" "${{ github.event.issue.title }}" "${{ github.event.issue.body }}" > issue.txt
-          cat > sys.txt <<'SYS'
-You are the CTO. Read the spec and return ONLY strict JSON:
-/** schema **
-{
-  "epic": string,
-  "assignee": "CursorDev",
-  "labels": string[],
-  "tasks": [{"title": string, "body": string, "labels"?: string[]}, ...]
-}
-SYS
+          cat > sys.txt << 'EOF'
+          You are the CTO. Read the spec and return ONLY strict JSON:
+          /** schema **
+          {
+            "epic": string,
+            "assignee": "CursorDev",
+            "labels": string[],
+            "tasks": [{"title": string, "body": string, "labels"?: string[]}, ...]
+          }
+          EOF
 
       - name: Call Claude
         run: |
@@ -67,7 +67,7 @@ SYS
           GH_TOKEN: ${{ github.token }}
         run: |
           printf "/tasks\n\`\`\`json\n%s\n\`\`\`\n" "$(cat tasks.json.txt)" > comment.md
-          jq -Rs --arg b "$(cat comment.md)" '{"body":$b}' <<<"" > body.json
+          jq -Rs --arg b "$(cat comment.md)" '{"body":$b}' <<< "" > body.json
           curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             -d @body.json \
             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
