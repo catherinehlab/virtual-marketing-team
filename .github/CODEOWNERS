@@ -1,0 +1,4 @@
+# 더 구체적인 규칙이 아래에 올수록 우선
+/*                  @ClaudeCode @catherinehlab
+/docs/**            @catherinehlab
+/clients/**         @catherinehlab

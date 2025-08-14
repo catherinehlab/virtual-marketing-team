@@ -1,0 +1,54 @@
+name: Claude Task Fanout → Issues for Cursor
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  DEFAULT_ASSIGNEE: ${{ secrets.CURSOR_HANDLE }}
+
+jobs:
+  fanout:
+    if: contains(github.event.comment.body, '/tasks')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract JSON block
+        id: parse
+        run: |
+          python - <<'PY'
+import os,sys,re,json
+body = os.environ['BODY']
+m = re.search(r'/tasks\s+```(?:json)?\s*(\{.*?\})\s*```', body, re.S)
+if not m: m = re.search(r'/tasks\s+(\{.*)', body, re.S)  # 느슨한 매칭
+data = json.loads(m.group(1))
+print("::set-output name=json::%s" % json.dumps(data))
+PY
+        env:
+          BODY: ${{ github.event.comment.body }}
+
+      - name: Create issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DATA='${{ steps.parse.outputs.json }}'
+          epic=$(echo "$DATA" | jq -r '.epic // "No epic"')
+          assignee=$(echo "$DATA" | jq -r '.assignee // ""')
+          [ -z "$assignee" ] && assignee="${DEFAULT_ASSIGNEE}"
+          labels=$(echo "$DATA" | jq -r '.labels // [] | join(",")')
+          echo "Epic: $epic | Assignee: $assignee | Labels: $labels"
+
+          echo "$DATA" | jq -c '.tasks[]' | while read -r t; do
+            title=$(echo "$t" | jq -r '.title')
+            body=$(echo "$t"  | jq -r '.body // ""')
+            tlabs=$(echo "$t" | jq -r '.labels // [] | join(",")')
+            [ -n "$labels" ] && all="$labels" || all=""
+            [ -n "$tlabs" ] && all="${all}${all:+,}$tlabs"
+            jq -n --arg title "$title" --arg body "$body" --arg labels "$all" --arg assignee "$assignee" \
+               '{title:$title, body:$body, labels:($labels|split(",")|map(select(length>0))), assignees:([$assignee]|map(select(length>0)))}' > new.json
+            curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                 -d @new.json \
+                 "https://api.github.com/repos/${{ github.repository }}/issues"
+          done

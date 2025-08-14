@@ -1,0 +1,47 @@
+name: Spec Intake (Issues only → Gemini → Claude)
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CLAUDE: ${{ secrets.CLAUDE_HANDLE }}
+
+jobs:
+  from-issue:
+    # spec-draft 라벨 + 허용 작성자만 처리
+    if: >-
+      contains(github.event.issue.labels.*.name, 'spec-draft') &&
+      contains(fromJson('["catherinehlab","ChatGPT5-bot","PhillipHong"]'), github.event.issue.user.login)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make raw from Issue body
+        run: |
+          printf "%s\n" "${{ github.event.issue.title }}" > /tmp/raw.md
+          printf "\n\n%s\n" "${{ github.event.issue.body }}" >> /tmp/raw.md
+          [ -d .cursor/rules ] && sed -n '1,120p' .cursor/rules/*.md >> /tmp/raw.md || true
+          [ -d docs/adr ] && sed -n '1,120p' docs/adr/*.md >> /tmp/raw.md || true
+
+      - name: Summarize with Gemini (SPEC)
+        run: |
+          bash tools/summarize_with_gemini.sh "/tmp/raw.md" "/tmp/capsule.md" "SPEC"
+          head -n 12 /tmp/capsule.md || true
+
+      - name: Post to Issue & mention Claude
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          BODY="$(cat /tmp/capsule.md; printf "\n\n/cc @$CLAUDE")"
+          printf '{"body":%s}\n' "$(jq -Rsa . <<<"$BODY" 2>/dev/null || python - <<'PY'
+import sys,json
+print(json.dumps({"dummy":sys.stdin.read()})[9:-1])
+PY
+)" > body.json
+          curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+            -d @body.json \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
