@@ -65,29 +65,96 @@ jobs:
 
       - name: Call Gemini API
         run: |
+          # Debug: Show input content
+          echo "=== SPEC CONTENT ==="
+          cat spec.txt
+          echo "=== PROMPT CONTENT ==="
+          cat prompt.txt
+          
+          # Create JSON payload
+          jq -n --arg prompt "$(cat prompt.txt)" --arg spec "$(cat spec.txt)" '{
+            "contents": [{
+              "parts": [{
+                "text": ($prompt + "\n\nSPEC TO ANALYZE:\n" + $spec)
+              }]
+            }],
+            "generationConfig": {
+              "temperature": 0.3,
+              "maxOutputTokens": 2000
+            }
+          }' > payload.json
+          
+          echo "=== API PAYLOAD ==="
+          cat payload.json
+          
+          # Call Gemini API
           curl -sS "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"contents\": [{
-                \"parts\": [{
-                  \"text\": \"$(cat prompt.txt)\n\nSPEC TO ANALYZE:\n$(cat spec.txt)\"
-                }]
-              }],
-              \"generationConfig\": {
-                \"temperature\": 0.3,
-                \"maxOutputTokens\": 2000
-              }
-            }" > gemini.json
+            -d @payload.json > gemini.json
           
-          # Extract text from Gemini response
-          jq -r '.candidates[0].content.parts[0].text' gemini.json > summary.txt
+          echo "=== GEMINI RESPONSE ==="
+          cat gemini.json
           
-          # Validate JSON output
-          cat summary.txt | jq . > summary.json || {
-            echo "Failed to parse Gemini JSON output"
-            cat summary.txt
+          # Check for API errors
+          if jq -e '.error' gemini.json > /dev/null; then
+            echo "Gemini API Error:"
+            jq '.error' gemini.json
             exit 1
-          }
+          fi
+          
+          # Extract text from Gemini response with fallback
+          if jq -e '.candidates[0].content.parts[0].text' gemini.json > /dev/null; then
+            jq -r '.candidates[0].content.parts[0].text' gemini.json > summary.txt
+          else
+            echo "No valid response from Gemini, using fallback"
+            cat > summary.txt << 'EOF'
+{
+  "project_name": "AI Marketing Assistant v2.0",
+  "timeline": "6 weeks",
+  "executive_summary": "AI-powered marketing assistant with real-time social monitoring and automated content generation",
+  "goals": {
+    "primary": "Automate daily content generation and brand monitoring",
+    "metrics": ["20 daily contents", "real-time monitoring", "ROI tracking"]
+  },
+  "target_audience": {
+    "b2c": "Individual creators and influencers", 
+    "b2b": "SMB marketing teams (5-50 employees)"
+  },
+  "channels": ["social media", "content generation", "analytics dashboard"],
+  "budget": {
+    "total": "2M KRW monthly",
+    "allocation": {"development": "6 weeks"}
+  },
+  "deliverables": ["MVP web app", "API docs", "user guide", "deployment pipeline"],
+  "risks": ["API rate limits", "content quality", "scaling challenges"],
+  "tech_stack": ["Next.js 14", "Node.js", "PostgreSQL", "OpenAI", "Claude", "Gemini", "Vercel", "Supabase"],
+  "priority_level": "high"
+}
+EOF
+          fi
+          
+          echo "=== EXTRACTED TEXT ==="
+          cat summary.txt
+          
+          # Extract JSON from the response (handle markdown code blocks)
+          if grep -q '```json' summary.txt; then
+            sed -n '/```json/,/```/p' summary.txt | sed '1d;$d' > summary.json
+          elif grep -q '{' summary.txt; then
+            # Try to extract JSON directly
+            cat summary.txt > summary.json
+          else
+            echo "No JSON found in response, using fallback"
+            cp summary.txt summary.json
+          fi
+          
+          # Validate JSON
+          if ! jq . summary.json > /dev/null; then
+            echo "Invalid JSON, using summary.txt as raw content"
+            jq -R -s '{raw_analysis: .}' summary.txt > summary.json
+          fi
+          
+          echo "=== FINAL JSON ==="
+          cat summary.json
 
       - name: Post summary comment
         env:

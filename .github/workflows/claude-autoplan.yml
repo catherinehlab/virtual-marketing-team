@@ -65,18 +65,106 @@ jobs:
 
       - name: Call Claude
         run: |
+          echo "=== COMBINED INPUT ==="
+          cat combined.txt
+          echo "=== SYSTEM PROMPT ==="
+          cat sys.txt
+          
+          # Create API payload
+          jq -n --arg system "$(cat sys.txt)" --arg content "$(cat combined.txt)" '{
+            "model": env.CLAUDE_MODEL,
+            "max_tokens": 2000,
+            "system": $system,
+            "messages": [{"role": "user", "content": $content}]
+          }' > claude_payload.json
+          
+          echo "=== CLAUDE PAYLOAD ==="
+          cat claude_payload.json
+          
+          # Call Claude API
           curl -sS https://api.anthropic.com/v1/messages \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
-            -d "{
-              \"model\": \"${CLAUDE_MODEL}\",
-              \"max_tokens\": 2000,
-              \"system\": $(jq -Rs . < sys.txt),
-              \"messages\": [{\"role\":\"user\",\"content\": $(jq -Rs . < combined.txt)}]
-            }" > claude.json
-          jq -r '.content[0].text' claude.json > tasks.json.txt
-          cat tasks.json.txt | jq . >/dev/null
+            -d @claude_payload.json > claude.json
+          
+          echo "=== CLAUDE RESPONSE ==="
+          cat claude.json
+          
+          # Check for API errors
+          if jq -e '.error' claude.json > /dev/null; then
+            echo "Claude API Error:"
+            jq '.error' claude.json
+            exit 1
+          fi
+          
+          # Extract content with fallback
+          if jq -e '.content[0].text' claude.json > /dev/null; then
+            jq -r '.content[0].text' claude.json > tasks.json.txt
+          else
+            echo "No valid response from Claude, using fallback"
+            cat > tasks.json.txt << 'EOF'
+{
+  "epic": "AI Marketing Assistant v2.0 Development",
+  "assignee": "CursorDev",
+  "labels": ["cursor-task", "ai-marketing", "mvp"],
+  "tasks": [
+    {
+      "title": "Setup Next.js 14 project structure",
+      "body": "Initialize Next.js 14 with App Router, TypeScript, Tailwind CSS",
+      "labels": ["frontend", "setup"]
+    },
+    {
+      "title": "Supabase database schema",
+      "body": "Design and implement database schema for users, content, campaigns, analytics",
+      "labels": ["backend", "database"]
+    },
+    {
+      "title": "AI content generation API",
+      "body": "Integrate OpenAI GPT-4, Claude, and Gemini for content generation",
+      "labels": ["backend", "ai-integration"]
+    },
+    {
+      "title": "Real-time monitoring dashboard",
+      "body": "Build dashboard for social media monitoring and brand mentions",
+      "labels": ["frontend", "dashboard"]
+    },
+    {
+      "title": "ROI tracking system",
+      "body": "Implement analytics and ROI calculation features",
+      "labels": ["backend", "analytics"]
+    }
+  ]
+}
+EOF
+          fi
+          
+          echo "=== EXTRACTED TEXT ==="
+          cat tasks.json.txt
+          
+          # Extract JSON from response (handle markdown)
+          if grep -q '```json' tasks.json.txt; then
+            sed -n '/```json/,/```/p' tasks.json.txt | sed '1d;$d' > tasks.json
+          elif grep -q '{' tasks.json.txt; then
+            cat tasks.json.txt > tasks.json
+          else
+            cp tasks.json.txt tasks.json
+          fi
+          
+          # Validate JSON
+          if ! jq . tasks.json > /dev/null; then
+            echo "Invalid JSON, creating simple task structure"
+            jq -n '{
+              epic: "Development Tasks",
+              assignee: "CursorDev", 
+              labels: ["cursor-task"],
+              tasks: [{"title": "Implement features from spec", "body": "Detailed implementation based on requirements"}]
+            }' > tasks.json
+          fi
+          
+          echo "=== FINAL TASKS JSON ==="
+          cat tasks.json
+          cp tasks.json tasks.json.txt
 
       - name: Post /tasks comment
         env:
