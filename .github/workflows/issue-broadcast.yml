@@ -15,18 +15,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-summary:
-    if: ${{ github.actor != 'github-actions[bot]' }}  # 루프 방지
+  notify-agents:
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
-    outputs:
-      summary: ${{ steps.mk.outputs.summary }}
-      action:  ${{ steps.mk.outputs.action }}
     steps:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Build event summary
-        id: mk
+      - name: Build event summary and notify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAUDE: ${{ vars.CLAUDE_HANDLE || 'ClaudeCode' }}
+          CURSOR: ${{ vars.CURSOR_HANDLE || 'CursorDev' }}
         run: |
           E="$GITHUB_EVENT_PATH"
           ACT="${{ github.event.action }}"
@@ -35,97 +35,39 @@ jobs:
           WHO="${{ github.actor }}"
           LABEL=$(jq -r '.label.name // ""' "$E")
           BODY=$(jq -r '.issue.body // ""' "$E" | head -c 800)
-          CHANGES=$(jq -r '.changes.body.from // ""' "$E" | head -c 400)
-          printf "**Event**: %s by @%s\n**Issue**: [%s](%s)\n" "$ACT" "$WHO" "$TITLE" "$URL" > S.md
-          if [ "$LABEL" != "" ]; then printf "**Label**: %s\n" "$LABEL" >> S.md; fi
-          if [ "$ACT" = "edited" ] && [ -n "$CHANGES" ]; then
-            printf "\n**Body diff (prev→now, truncated)**\n- Prev: %s\n- Now : %s\n" "$CHANGES" "$BODY" >> S.md
-          else
-            printf "\n**Body (truncated)**\n%s\n" "$BODY" >> S.md
-          fi
-          SUM=$(python - <<'PY'
-import sys,json
-print(json.dumps(open("S.md").read()))
-PY
-)
-          echo "summary=$SUM" >> $GITHUB_OUTPUT
-          echo "action=$ACT"  >> $GITHUB_OUTPUT
-
-  gemini-summarize:
-    needs: build-summary
-    runs-on: ubuntu-latest
-    if: ${{ secrets.GEMINI_API_KEY != '' }}  # 키 없으면 자동 skip
-    outputs:
-      capsule: ${{ steps.gg.outputs.capsule }}
-    steps:
-      - name: Make capsule with Gemini (fallback-safe)
-        id: gg
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          RAW: ${{ needs.build-summary.outputs.summary }}
-        run: |
-          # 간단 API 호출 (모델명/엔드포인트는 사용중 CLI/스크립트에 맞게 대체 가능)
-          cat > prompt.txt <<'P'
-Summarize the following GitHub issue event into a compact "Context Capsule" for downstream agents (max ~1200 chars). Focus on goals, constraints, acceptance criteria, and actionable deltas.
-P
-          python - <<'PY'
-import os, json, textwrap
-raw = json.loads(os.environ["RAW"])
-# 실제 Gemini 호출 대신, 연결 이슈 시에는 raw를 캡슐로 그대로 사용(임시)
-cap = f"### Context Capsule\n{raw}"
-print(cap)
-PY
-          CAP=$(cat stdout 2>/dev/null || cat prompt.txt) || true
-          # 위는 데모용. 실제론 your tools/summarize_with_gemini.sh 사용 권장.
-          echo "capsule<<EOF" >> $GITHUB_OUTPUT
-          echo "### Context Capsule" >> $GITHUB_OUTPUT
-          python - <<'PY'
-import os, json
-print(json.loads(os.environ["RAW"]))
-PY
-          echo "EOF" >> $GITHUB_OUTPUT
-
-  notify-claude:
-    needs: [build-summary, gemini-summarize]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Post mention to Claude (+ capsule)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CLAUDE:   ${{ vars.CLAUDE_HANDLE || 'ClaudeCode' }}
-          CAPS:     ${{ needs.gemini-summarize.outputs.capsule || needs.build-summary.outputs.summary }}
-        run: |
-          BODY="[@$CLAUDE]\n$CAPS\n\n> Auto-mention: event broadcast"
-          jq -Rs --arg b "$BODY" '{"body":$b}' <<<"" > body.json
+          
+          # Build summary
+          printf "**Event**: %s by @%s\n**Issue**: [%s](%s)\n" "$ACT" "$WHO" "$TITLE" "$URL" > summary.md
+          if [ "$LABEL" != "" ]; then printf "**Label**: %s\n" "$LABEL" >> summary.md; fi
+          printf "\n**Body (truncated)**\n%s\n" "$BODY" >> summary.md
+          
+          # Notify Claude
+          echo "[@$CLAUDE]" > claude_comment.txt
+          echo "### Context Capsule" >> claude_comment.txt
+          cat summary.md >> claude_comment.txt
+          echo "" >> claude_comment.txt
+          echo "> Auto-mention: event broadcast" >> claude_comment.txt
+          jq -Rs --rawfile body claude_comment.txt '{"body":$body}' > claude_body.json
           curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            -d @body.json \
+            -d @claude_body.json \
             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
-
-  notify-cursor:
-    needs: build-summary
-    runs-on: ubuntu-latest
-    steps:
-      - name: Assign & ping Cursor on implementation issues
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CURSOR:   ${{ vars.CURSOR_HANDLE || 'CursorDev' }}
-          ACTION:   ${{ needs.build-summary.outputs.action }}
-        run: |
-          # 구현 이슈(라벨 cursor-task)거나, 댓글 이벤트에 "ready" 키워드가 있으면 Cursor를 멘션/배정
-          E="$GITHUB_EVENT_PATH"
+          
+          # Check if Cursor should be notified
           HAS_CURSOR=$(jq -r '([.issue.labels[].name]|index("cursor-task")) != null' "$E")
           READY=$(jq -r '.comment.body // ""' "$E" | grep -qi '\bready\b' && echo 1 || echo 0)
+          
           if [ "$HAS_CURSOR" = "true" ] || [ "$READY" -eq 1 ]; then
-            # assign
+            # Assign Cursor
             curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
               -d "{\"assignees\":[\"$CURSOR\"]}" \
               "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/assignees" >/dev/null || true
-            # comment
-            BODY="@$CURSOR 작업 준비되었습니다. (auto-broadcast)"
-            jq -Rs --arg b "$BODY" '{"body":$b}' <<<"" > body.json
+            
+            # Notify Cursor
+            CURSOR_BODY="@$CURSOR 작업 준비되었습니다. (auto-broadcast)"
+            jq -Rs --arg b "$CURSOR_BODY" '{"body":$b}' <<< "" > cursor_body.json
             curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-              -d @body.json \
+              -d @cursor_body.json \
               "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
           else
-            echo "No cursor-task label / ready keyword — skip."
+            echo "No cursor-task label / ready keyword — skip Cursor notification."
           fi
