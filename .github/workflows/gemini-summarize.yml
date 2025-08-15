@@ -107,30 +107,7 @@ jobs:
             jq -r '.candidates[0].content.parts[0].text' gemini.json > summary.txt
           else
             echo "No valid response from Gemini, using fallback"
-            cat > summary.txt << 'EOF'
-{
-  "project_name": "AI Marketing Assistant v2.0",
-  "timeline": "6 weeks",
-  "executive_summary": "AI-powered marketing assistant with real-time social monitoring and automated content generation",
-  "goals": {
-    "primary": "Automate daily content generation and brand monitoring",
-    "metrics": ["20 daily contents", "real-time monitoring", "ROI tracking"]
-  },
-  "target_audience": {
-    "b2c": "Individual creators and influencers", 
-    "b2b": "SMB marketing teams (5-50 employees)"
-  },
-  "channels": ["social media", "content generation", "analytics dashboard"],
-  "budget": {
-    "total": "2M KRW monthly",
-    "allocation": {"development": "6 weeks"}
-  },
-  "deliverables": ["MVP web app", "API docs", "user guide", "deployment pipeline"],
-  "risks": ["API rate limits", "content quality", "scaling challenges"],
-  "tech_stack": ["Next.js 14", "Node.js", "PostgreSQL", "OpenAI", "Claude", "Gemini", "Vercel", "Supabase"],
-  "priority_level": "high"
-}
-EOF
+            echo '{"project_name":"Fallback Analysis","timeline":"TBD","executive_summary":"Auto-generated fallback","priority_level":"medium"}' > summary.txt
           fi
           
           echo "=== EXTRACTED TEXT ==="

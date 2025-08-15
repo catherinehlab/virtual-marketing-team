@@ -103,40 +103,7 @@ jobs:
             jq -r '.content[0].text' claude.json > tasks.json.txt
           else
             echo "No valid response from Claude, using fallback"
-            cat > tasks.json.txt << 'EOF'
-{
-  "epic": "AI Marketing Assistant v2.0 Development",
-  "assignee": "CursorDev",
-  "labels": ["cursor-task", "ai-marketing", "mvp"],
-  "tasks": [
-    {
-      "title": "Setup Next.js 14 project structure",
-      "body": "Initialize Next.js 14 with App Router, TypeScript, Tailwind CSS",
-      "labels": ["frontend", "setup"]
-    },
-    {
-      "title": "Supabase database schema",
-      "body": "Design and implement database schema for users, content, campaigns, analytics",
-      "labels": ["backend", "database"]
-    },
-    {
-      "title": "AI content generation API",
-      "body": "Integrate OpenAI GPT-4, Claude, and Gemini for content generation",
-      "labels": ["backend", "ai-integration"]
-    },
-    {
-      "title": "Real-time monitoring dashboard",
-      "body": "Build dashboard for social media monitoring and brand mentions",
-      "labels": ["frontend", "dashboard"]
-    },
-    {
-      "title": "ROI tracking system",
-      "body": "Implement analytics and ROI calculation features",
-      "labels": ["backend", "analytics"]
-    }
-  ]
-}
-EOF
+            echo '{"epic":"Development Tasks","assignee":"CursorDev","labels":["cursor-task"],"tasks":[{"title":"Implement features from spec","body":"Detailed implementation based on requirements"}]}' > tasks.json.txt
           fi
           
           echo "=== EXTRACTED TEXT ==="
