@@ -9,11 +9,8 @@ permissions:
 jobs:
   plan:
     if: >
-      (github.event.action == 'labeled' &&
-        (github.event.label.name == 'spec-draft' || github.event.label.name == 'needs-plan')) ||
-      (github.event.action != 'labeled' &&
-        (contains(github.event.issue.labels.*.name, 'spec-draft') ||
-         contains(github.event.issue.labels.*.name, 'needs-plan')))
+      (github.event.action == 'labeled' && github.event.label.name == 'needs-plan') ||
+      (github.event.action != 'labeled' && contains(github.event.issue.labels.*.name, 'needs-plan'))
     runs-on: ubuntu-latest
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -33,19 +30,38 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Build prompt
+      - name: Build prompt with Gemini analysis
         run: |
+          # Get issue content
           printf "%s\n\n%s\n" "${{ github.event.issue.title }}" "${{ github.event.issue.body }}" > issue.txt
+          
+          # Extract Gemini summary from issue comments if available
+          curl -sS -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments" \
+            | jq -r '.[] | select(.body | contains("## 📊 Gemini Analysis Summary")) | .body' \
+            | sed -n '/```json/,/```/p' | sed '1d;$d' > gemini_summary.json || echo "{}" > gemini_summary.json
+          
           cat > sys.txt << 'EOF'
-          You are the CTO. Read the spec and return ONLY strict JSON:
-          /** schema **
+          You are the CTO. Break down the spec into actionable development tasks.
+
+          Use the Gemini analysis summary when available to understand project structure and priorities.
+          Return ONLY strict JSON:
+
           {
             "epic": string,
-            "assignee": "CursorDev",
+            "assignee": "CursorDev", 
             "labels": string[],
             "tasks": [{"title": string, "body": string, "labels"?: string[]}, ...]
           }
+          
+          Make tasks specific, actionable, and technically focused. Each task should be completable by a developer.
           EOF
+          
+          # Combine original spec + Gemini analysis
+          echo "=== ORIGINAL SPEC ===" > combined.txt
+          cat issue.txt >> combined.txt
+          echo -e "\n=== GEMINI ANALYSIS ===" >> combined.txt
+          cat gemini_summary.json >> combined.txt
 
       - name: Call Claude
         run: |
@@ -57,7 +73,7 @@ jobs:
               \"model\": \"${CLAUDE_MODEL}\",
               \"max_tokens\": 2000,
               \"system\": $(jq -Rs . < sys.txt),
-              \"messages\": [{\"role\":\"user\",\"content\": $(jq -Rs . < issue.txt)}]
+              \"messages\": [{\"role\":\"user\",\"content\": $(jq -Rs . < combined.txt)}]
             }" > claude.json
           jq -r '.content[0].text' claude.json > tasks.json.txt
           cat tasks.json.txt | jq . >/dev/null

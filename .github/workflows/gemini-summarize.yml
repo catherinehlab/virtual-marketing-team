@@ -1,0 +1,124 @@
+name: Gemini Summarize (spec analysis & structuring)
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  issues: write
+
+jobs:
+  summarize:
+    if: >
+      (github.event.action == 'labeled' && github.event.label.name == 'spec-draft') ||
+      (github.event.action != 'labeled' && contains(github.event.issue.labels.*.name, 'spec-draft'))
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-1.5-pro
+    steps:
+      - name: Dump event (debug)
+        run: |
+          echo "EVENT=${GITHUB_EVENT_NAME}"
+          jq . < "$GITHUB_EVENT_PATH" || true
+
+      - name: Guard - API key
+        run: |
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "No GEMINI_API_KEY; skipping summarization." && exit 0
+          fi
+
+      - name: Install jq and curl
+        run: sudo apt-get update && sudo apt-get install -y jq curl
+
+      - name: Build spec content
+        run: |
+          printf "%s\n\n%s\n" "${{ github.event.issue.title }}" "${{ github.event.issue.body }}" > spec.txt
+          cat > prompt.txt << 'EOF'
+          You are a technical product manager. Analyze this spec and return ONLY a structured JSON summary:
+
+          ** REQUIRED JSON SCHEMA **
+          {
+            "project_name": string,
+            "timeline": string,
+            "executive_summary": string,
+            "goals": {
+              "primary": string,
+              "metrics": [string]
+            },
+            "target_audience": {
+              "b2c": string,
+              "b2b": string
+            },
+            "channels": [string],
+            "budget": {
+              "total": string,
+              "allocation": object
+            },
+            "deliverables": [string],
+            "risks": [string],
+            "tech_stack": [string],
+            "priority_level": "high" | "medium" | "low"
+          }
+
+          Focus on extracting key business requirements, technical constraints, and success metrics. Be concise but comprehensive.
+          EOF
+
+      - name: Call Gemini API
+        run: |
+          curl -sS "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"contents\": [{
+                \"parts\": [{
+                  \"text\": \"$(cat prompt.txt)\n\nSPEC TO ANALYZE:\n$(cat spec.txt)\"
+                }]
+              }],
+              \"generationConfig\": {
+                \"temperature\": 0.3,
+                \"maxOutputTokens\": 2000
+              }
+            }" > gemini.json
+          
+          # Extract text from Gemini response
+          jq -r '.candidates[0].content.parts[0].text' gemini.json > summary.txt
+          
+          # Validate JSON output
+          cat summary.txt | jq . > summary.json || {
+            echo "Failed to parse Gemini JSON output"
+            cat summary.txt
+            exit 1
+          }
+
+      - name: Post summary comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > comment.md << 'EOF'
+          ## 📊 Gemini Analysis Summary
+
+          **Spec Analysis Complete** ✅
+
+          ```json
+          EOF
+          cat summary.json >> comment.md
+          cat >> comment.md << 'EOF'
+          ```
+
+          ---
+          *Next: Claude will generate tasks based on this summary*
+          🤖 Ready for `needs-plan` label to trigger Claude Autoplan
+          EOF
+          
+          jq -Rs --arg b "$(cat comment.md)" '{"body":$b}' <<< "" > body.json
+          curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -d @body.json \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments"
+
+      - name: Add needs-plan label
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -X POST \
+            -d '{"labels":["needs-plan"]}' \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/labels"
